@@ -58,3 +58,50 @@ Agents must be economically literate.
 Autonomy must be balanced with oversight.
 * **The Skill:** Creating clear "Audit Trails" and natural language summaries of intended actions for human approval.
 * **Why it Matters:** High-value transactions should require a "Human-in-the-Loop" trigger. The agent must be skilled at explaining *why* it is taking an action, enabling humans to act as the ultimate security layer.
+
+
+from typing import Annotated, TypedDict, List
+from langgraph.graph import StateGraph, START, END
+from langgraph.graph.message import add_messages
+from langchain_openai import ChatOpenAI
+from langchain_core.tools import tool
+
+# 1. Define the State
+class AgentState(TypedDict):
+    messages: Annotated[list, add_messages]
+    contract_code: str
+    vulnerabilities: List[str]
+
+# 2. Define specialized Security Tools
+@tool
+def static_analysis_tool(code: str):
+    """Performs static analysis on Solidity code to find common patterns like Reentrancy."""
+    # In a real scenario, this would trigger Slither or Mythril
+    if "msg.sender.call" in code and "balances[msg.sender] = 0" in code.split("msg.sender.call")[1]:
+        return "Vulnerability Found: Reentrancy. State change happens after external call."
+    return "No obvious static patterns found."
+
+# 3. Define the Nodes (The 'Brain' steps)
+def security_analyst(state: AgentState):
+    llm = ChatOpenAI(model="gpt-5-security-optimized")
+    llm_with_tools = llm.bind_tools([static_analysis_tool])
+    response = llm_with_tools.invoke(state["messages"])
+    return {"messages": [response]}
+
+def tool_node(state: AgentState):
+    # This node executes the tool calls requested by the analyst
+    last_message = state["messages"][-1]
+    # Standard LangGraph logic to execute tools would go here
+    return {"messages": [tool_result_message]}
+
+# 4. Build the Graph
+builder = StateGraph(AgentState)
+
+builder.add_node("analyst", security_analyst)
+builder.add_node("tools", tool_node)
+
+builder.add_edge(START, "analyst")
+builder.add_conditional_edges("analyst", lambda x: "continue" if x["messages"][-1].tool_calls else "end")
+builder.add_edge("tools", "analyst") # The Loop: Check again after tool results
+
+graph = builder.compile()
